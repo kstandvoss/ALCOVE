@@ -38,7 +38,7 @@ function Attention:updateGradInput(input, gradOutput)
 end
 
 function Attention:updateParameters(learningRate)
-    self.alphas:add(learningRate, self.grad)
+    self.alphas:add(-learningRate, self.grad)
     self.alphas[torch.lt(self.alphas,0)] = 0
 end
 
@@ -52,7 +52,11 @@ end
 function Attention:accGradParameters(input, gradOutput, scale)
    distance = torch.Tensor(self.n_input)
    for i = 1,self.n_input do
-       distance[i] = gradOutput * self.specificity * torch.sum(torch.abs(self.exemplars[i] - input))
+        sum = 0
+        for j = 1,self.n_exemplars do 
+            sum = sum + (self.specificity * gradOutput[1][j] * self.output[j] * torch.abs(self.exemplars[j][i] - input[i]))
+        end
+        distance[i] = sum    
    end
    self.grad = self.grad + torch.mul(distance, scale)  
 end
