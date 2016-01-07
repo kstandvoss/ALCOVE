@@ -1,0 +1,107 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Dec 10 12:00:29 2015
+
+@author: Art_Rich
+"""
+
+""" Libraries """
+
+import numpy as np
+from matplotlib.pyplot import *
+from ALCOVE_class import *
+
+""" Parameters """
+
+n_neurons = 100 # ensemble sizes
+n_dims = 3 # input dimensions
+n_cats = 1 # output dimensions
+n_stims = 8 # exemplar number
+t_stim = 2 # stimulation time
+lr_ro = 4e-5 # learning rate for output weights
+n_epochs = 50 # number of epochs (1 Epoch = n_stims Stimuli)
+n_subjects = 3 # number of runs of the whole simulation
+
+
+
+#%%
+
+""" create exemplar and class matrices """
+
+# create exemplars
+exemplars = np.zeros((n_stims, n_dims))
+exemplars[0,:] = np.array([1,1,1])
+exemplars[1,:] = np.array([0,1,1])
+exemplars[2,:] = np.array([1,0,1])
+exemplars[3,:] = np.array([1,1,0])
+exemplars[4,:] = np.array([0,0,1])
+exemplars[5,:] = np.array([1,0,0])
+exemplars[6,:] = np.array([0,1,0])
+exemplars[7,:] = np.array([0,0,0])
+
+# categorization key
+category = np.zeros((6, n_stims))
+category[0,:] = np.array([1, 0, 1, 1, 0, 1, 0, 0])
+category[1,:] = np.array([0, 1, 1, 0, 0, 1, 1, 0])
+category[2,:] = np.array([1, 1, 0, 1, 0, 1, 0, 0])
+category[3,:] = np.array([1, 1, 1, 1, 0, 0, 0, 0])
+category[4,:] = np.array([0, 1, 1, 1, 0, 1, 0, 0])
+category[5,:] = np.array([1, 0, 0, 0, 1, 1, 1, 0])
+
+#%%
+
+""" run ALCOVE for different learning types and numbers of epochs """
+
+errors_all = []
+
+for n in range(n_subjects):
+    
+    # create model
+    alcove = ALCOVE(N = n_neurons)
+    
+    # get subject specific randomisation of learing categories
+    ind_category = np.array(np.arange(0,6,1), ndmin = 2).T
+    np.random.shuffle(ind_category) 
+    
+    for c in ind_category:
+        
+        # get categories
+        cats = np.squeeze(category[c,:])
+        
+        # initialize feature/class matrices/error list
+        errors = []
+        features_train = np.zeros([n_stims * n_epochs, n_dims])
+        classes = np.zeros((len(features_train),1))
+        
+        for n in range(n_epochs):
+            
+            # get randomized stimulus presentation for each epoch
+            ind_train = np.array(np.arange(0,8,1), ndmin = 2).T     
+            np.random.shuffle(ind_train)
+            features_train[n*n_stims : (n+1)*n_stims, :] = exemplars[np.squeeze(ind_train),:]
+            classes[n*n_stims : (n+1)*n_stims] = cats[ind_train]
+            
+        # train and run model
+        alcove.learn_model(features_train, classes, lr = lr_ro, t_stim = t_stim)
+        alcove.run_model(test_window = n_stims, plot_output = False)
+            
+        errors.append(alcove.error)
+        
+        np.save('error_list_subject_' + np.str(n), errors)
+            
+    errors_all.append(errors)
+
+np.save('error_list_complete', errors_all)
+
+#%%
+
+""" Plot learning curves """
+
+figure()
+for i in range(len(category)):
+    performance = 1 - np.array(errors_all[i])
+    plot(np.arange(0,n_epochs,1), performance, label = 'Learning Type ' + np.str(i))
+legend(loc = 'lower right')
+title('ALCOVE Learning Curves (implemented with Nengo)')
+ylabel('Categorization Performance')
+xlabel('# epochs')
