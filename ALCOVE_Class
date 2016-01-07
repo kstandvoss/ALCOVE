@@ -1,0 +1,166 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Dec 10 10:47:16 2015
+
+@author: Art_Rich
+"""
+
+""" Libraries """
+
+import numpy as np
+import nengo
+from matplotlib.pyplot import *
+
+#%%
+
+""" Solver that initializes weights between 2 Ensembles with given weight matrix """
+
+class set_weights(nengo.solvers.Solver):
+    
+    def __init__(self, wMtrx, weights = True):
+        
+        self.weights = weights
+        self.decoders = wMtrx.T
+
+    def __call__(self, A, Y, E=None, rng=None):
+        
+        return self.decoders, []
+        
+#%%
+        
+class ALCOVE:
+    
+    
+    def __init__(self, N = 100, inp_dims = 3, out_dims = 1):
+        
+        self.N = N; # number of neurons in ensembles
+        self.inp_dims = inp_dims; # input dimensions
+        self.out_dims = out_dims; # output dimensions
+   
+   
+    def learn_model(self, training_features, classes, test_features = None, t_stim = 2, lr = 3e-5):
+        
+        self.features = training_features; # matrix with columns = features and rows = stimuli
+        self.test_data = test_features; # matrix equivalent to 'features' with test data
+        self.classes = classes; # vector with real classes of stimuli
+        self.t_stim = t_stim; # time of stimulus presentation
+        self.training_length = len(self.features) # length of weight learning
+        if self.test_data is not None:
+            self.drive_length = self.training_length + len(self.test_data) # length of network simulation
+        else:
+            self.drive_length = self.training_length
+        self.lr = lr # learning rate for read-out weights
+        
+        """ function that returns input stimuli as stored in 'features' """
+        
+        def inp(t):
+            
+            ind = np.int(t/t_stim) # stimulus index
+            
+            if ind < self.training_length: # as long as in training period
+                return self.features[ind,:] # return training stimuli features
+            elif ind < self.drive_length: # if not
+                return self.test_data[ind-self.training_length,:] # return test stimuli features
+            else:
+                return np.zeros(self.inp_dims)
+        
+        """ function that returns classes as stored in 'classes' """
+        
+        def teach(t):
+            
+            ind = np.int(t/t_stim) # stimulus index
+            
+            return self.classes[ind,:] if ind < self.drive_length else np.zeros(self.out_dims) # return stimulus class as long as in drive period
+        
+        self.model = nengo.Network()
+        
+        with self.model:
+            
+            """ basic ensembles """
+            
+            self.I = nengo.Ensemble(n_neurons = self.N, dimensions = self.inp_dims)  # ensemble which receives the input
+            self.O = nengo.Ensemble(n_neurons = self.N, dimensions = self.out_dims) # output ensemble
+            self.E = nengo.Ensemble(n_neurons = self.N, dimensions = self.out_dims, radius = 3) # error ensemble
+            self.C = nengo.Ensemble(n_neurons = self.N, dimensions = self.out_dims) # ensemble that receives true classes
+            
+            """ Input nodes """
+            
+            self.p_inp = nengo.Node(output = inp) # provides features to I
+            self.p_teach = nengo.Node(output = teach) # provides classes to C
+            
+            nengo.Connection(self.p_inp, self.I)
+            nengo.Connection(self.p_teach, self.C)
+            
+            """ Learn output weights """
+            
+            trans = np.ones((1,self.inp_dims)) # transform of dimensions from I to O
+            self.conn = nengo.Connection(self.I, self.O, transform = trans, solver = set_weights(np.random.rand(self.N, self.N))) # random initialization of weights between I and O
+            
+            nengo.Connection(self.O, self.E, transform = -1)
+            nengo.Connection(self.C, self.E)
+            
+            self.error_conn = nengo.Connection(self.E, self.O, modulatory = True) # connection that modulates weights between I and O according to value in E
+            self.conn.learning_rule_type = nengo.PES(error_connection = self.error_conn, learning_rate = self.lr) # define learning type
+            
+            """ shut off learning """
+            
+            self.stop_learning = nengo.Node(output=lambda t: t >= self.training_length * self.t_stim)
+            nengo.Connection(self.stop_learning, self.E.neurons, transform = -20 * np.ones((self.E.n_neurons, 1)))
+
+  
+    def run_model(self, window_size = 1000, threshold = 0.8, test_window = 0, plot_output = True):
+        
+        self.test_window = test_window # parameter that defines the last n stimuli on which classification error is computed. Only needed of no test data is provided
+        
+        """ collect probes """
+        
+        with self.model:
+            
+            E_probe = nengo.Probe(self.E)
+            I_probe = nengo.Probe(self.I)
+            O_probe = nengo.Probe(self.O)
+            C_probe = nengo.Probe(self.C)
+            teach_probe = nengo.Probe(self.p_teach)
+        
+        """ run simulation """
+        
+        sim = nengo.Simulator(self.model)
+        t_sim = self.drive_length * self.t_stim
+        sim.run(t_sim)
+        
+        """ transform O activation into category decisions """
+        
+        signal = np.squeeze(sim.data[O_probe]) # get Output signal
+        window = self.t_stim * window_size # define sliding window   
+        self.choice = np.zeros(self.drive_length) # array that stores classification choice based on network output
+        
+        for i in range(self.drive_length): # go through all stimuli and make classification choice
+        
+            test = np.mean(signal[i*window : (i+1)*window]) # look at mean response in stimulus window
+            self.choice[i] = 1 if test > threshold else 0   # compare mean response against threshold
+        
+        """ Compute classification error """
+        
+        if self.test_window == 0:
+            
+            self.error = np.mean(np.abs(np.squeeze(self.classes[self.training_length:self.drive_length]) - self.choice[self.training_length:self.drive_length])) # mean absolute difference between actual classes and network classification in test period
+        
+        else:
+            
+            self.error = []
+        
+            for i in range(self.drive_length//self.test_window):
+            
+                self.error.append(np.mean(np.abs(np.squeeze(self.classes[i*self.test_window:(i+1)*self.test_window]) - self.choice[i*self.test_window:(i+1)*self.test_window]))) # mean absolute difference between actual classes and network classification in test window
+    
+        """ Plotting """
+        
+        if plot_output:
+            figure()
+            plot(sim.trange(), signal, label='Network Output', color='r', linewidth=2.0)
+            plot(sim.trange(), sim.data[teach_probe], label='Real Classes', color='k', linewidth=2.0)
+            axvline(x = self.training_length * self.t_stim, label = 'End of Learning')
+            legend(loc='lower right')
+            ylim(-3.2, 3.2)
+            title('ALCOVE Classification vs Actual Classes')
+   
