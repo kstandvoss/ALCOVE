@@ -58,5 +58,5 @@ function Attention:accGradParameters(input, gradOutput, scale)
         end
         distance[i] = sum    
    end
-   self.grad = self.grad + torch.mul(distance, scale)  
+   self.grad = self.grad + distance --torch.mul(distance, scale)  
 end
